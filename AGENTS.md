@@ -21,7 +21,6 @@ Use [Bun](https://bun.sh) for everything: `bun install` for dependencies, `bun r
 | `bunx wrangler deploy` | Deploy to Cloudflare |
 | `bunx wrangler types` | Generate TypeScript types |
 | `bun install` | Install dependencies |
-| `bun test` | Run tests (vitest) |
 
 Run `bunx wrangler types` after changing bindings in wrangler.jsonc.
 
