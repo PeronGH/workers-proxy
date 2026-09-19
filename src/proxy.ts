@@ -59,7 +59,9 @@ export async function proxyHttp(request: Request, target: string): Promise<Respo
  * counterpart of `websocat -b ws://host/tcp://target:port`.
  *
  * Incoming WebSocket frames are written verbatim to the socket; bytes read
- * back from the socket are sent as binary WebSocket frames.
+ * back from the socket are sent as binary WebSocket frames. Half-closes are
+ * honoured in both directions: a Close frame from the client sends a FIN to
+ * the target without dropping bytes still in flight the other way.
  */
 export async function proxyStream(request: Request, target: string): Promise<Response> {
 	const useTls = target.startsWith('tls://');
@@ -78,7 +80,9 @@ export async function proxyStream(request: Request, target: string): Promise<Res
 
 	const socket = connect(
 		{ hostname, port },
-		{ secureTransport: useTls ? 'on' : 'off', allowHalfOpen: false },
+		// `allowHalfOpen` keeps the writable side alive after the target EOFs, so a
+		// FIN from the target doesn't stop us writing to it.
+		{ secureTransport: useTls ? 'on' : 'off', allowHalfOpen: true },
 	);
 
 	// Wait for the connection before upgrading, so a failed dial surfaces as an
@@ -94,11 +98,35 @@ export async function proxyStream(request: Request, target: string): Promise<Res
 	// `new Uint8Array(blob)` would silently yield an empty array. Convert
 	// synchronously so frame order is preserved.
 	server.binaryType = 'arraybuffer';
-	server.accept();
+	// Suppress the runtime's automatic Close reply: without it the socket closes
+	// as soon as the client half-closes, dropping target bytes still in flight.
+	server.accept({ allowHalfOpen: true });
 
 	// WebSocket -> TCP. Await each write so the socket's backpressure propagates
 	// to the WebSocket instead of buffering unboundedly.
 	const writer = socket.writable.getWriter();
+
+	let targetClosed = false;
+	let clientClosed = false;
+	let clientCloseCode: number | undefined;
+
+	// Half-close the target: flush queued writes, then send FIN. Idempotent.
+	async function closeTarget(): Promise<void> {
+		if (targetClosed) return;
+		targetClosed = true;
+		try {
+			await writer.close();
+		} catch {
+			// already closed, or aborted by the peer
+		}
+	}
+
+	function closeClient(code?: number): void {
+		if (clientClosed) return;
+		clientClosed = true;
+		server.close(code);
+	}
+
 	server.addEventListener('message', async (event) => {
 		const data = event.data;
 		const chunk = typeof data === 'string' ? new TextEncoder().encode(data) : new Uint8Array(data);
@@ -108,11 +136,21 @@ export async function proxyStream(request: Request, target: string): Promise<Res
 			// write failed — the read loop observes the closed socket and tears down
 		}
 	});
-	server.addEventListener('close', () => {
-		writer.close().catch(() => {});
+
+	// The client half-closed: forward its FIN to the target. Target bytes keep
+	// reaching the client until the target itself closes, at which point its
+	// close code is echoed back.
+	server.addEventListener('close', (event) => {
+		clientCloseCode = event.code;
+		void closeTarget();
 	});
 
-	// TCP -> WebSocket (binary frames)
+	// A socket error rejects `closed`; close the client with an abnormal code
+	// rather than waiting for a FIN that will never arrive.
+	socket.closed.catch(() => closeClient(1006));
+
+	// TCP -> WebSocket (binary frames). On EOF, FIN the target before closing
+	// the WebSocket so the Close frame is the last thing the caller sees.
 	(async () => {
 		try {
 			for await (const chunk of socket.readable) {
@@ -121,7 +159,8 @@ export async function proxyStream(request: Request, target: string): Promise<Res
 		} catch {
 			// socket error — fall through to close
 		} finally {
-			server.close();
+			await closeTarget();
+			closeClient(clientCloseCode);
 		}
 	})();
 
