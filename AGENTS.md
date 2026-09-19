@@ -9,19 +9,25 @@ STOP. Your knowledge of Cloudflare Workers APIs and limits may be outdated. Alwa
 
 For all limits and quotas, retrieve from the product's `/platform/limits/` page. eg. `/workers/platform/limits`
 
+## Package Manager
+
+Use [Bun](https://bun.sh) for everything: `bun install` for dependencies, `bun run <script>` for `package.json` scripts, `bunx <pkg>` to run a CLI without installing it. Never use `npm`, `npx`, `yarn`, or `pnpm` — `bun.lock` is the only lockfile in this repo.
+
 ## Commands
 
 | Command | Purpose |
 |---------|---------|
-| `npx wrangler dev` | Local development |
-| `npx wrangler deploy` | Deploy to Cloudflare |
-| `npx wrangler types` | Generate TypeScript types |
+| `bunx wrangler dev` | Local development |
+| `bunx wrangler deploy` | Deploy to Cloudflare |
+| `bunx wrangler types` | Generate TypeScript types |
+| `bun install` | Install dependencies |
+| `bun test` | Run tests (vitest) |
 
-Run `wrangler types` after changing bindings in wrangler.jsonc.
+Run `bunx wrangler types` after changing bindings in wrangler.jsonc.
 
 ## Local Explorer (Debugging & Inspection)
 
-When running `npx wrangler dev`, a Local Explorer API is available for inspecting and debugging local Workers, bindings, and storage state. The API base URL is printed in the terminal when the dev server starts.
+When running `bunx wrangler dev`, a Local Explorer API is available for inspecting and debugging local Workers, bindings, and storage state. The API base URL is printed in the terminal when the dev server starts.
 
 Key endpoints (relative to the dev server URL):
 
