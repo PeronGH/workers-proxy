@@ -90,6 +90,10 @@ export async function proxyStream(request: Request, target: string): Promise<Res
 	}
 
 	const { 0: client, 1: server } = new WebSocketPair();
+	// Binary frames arrive as `Blob` by default on current compatibility dates, and
+	// `new Uint8Array(blob)` would silently yield an empty array. Convert
+	// synchronously so frame order is preserved.
+	server.binaryType = 'arraybuffer';
 	server.accept();
 
 	// WebSocket -> TCP. Await each write so the socket's backpressure propagates
