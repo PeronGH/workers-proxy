@@ -1,18 +1,19 @@
-/**
- * Welcome to Cloudflare Workers! This is your first worker.
- *
- * - Run `npm run dev` in your terminal to start a development server
- * - Open a browser tab at http://localhost:8787/ to see your worker in action
- * - Run `npm run deploy` to publish your worker
- *
- * Bind resources to your worker in `wrangler.jsonc`. After adding bindings, a type definition for the
- * `Env` object can be regenerated with `npm run cf-typegen`.
- *
- * Learn more at https://developers.cloudflare.com/workers/
- */
+import { proxyHttp, proxyStream } from './proxy';
 
 export default {
-	async fetch(request, env, ctx): Promise<Response> {
-		return new Response("Hello World!");
+	async fetch(request): Promise<Response> {
+		// The target is carried in the path: `https://example.com/path`,
+		// `tcp://host:port`, or `tls://host:port`.
+		const target = new URL(request.url).pathname.slice(1);
+
+		if (target.startsWith('http://') || target.startsWith('https://')) {
+			return proxyHttp(request, target);
+		}
+
+		if (target.startsWith('tcp://') || target.startsWith('tls://')) {
+			return proxyStream(request, target);
+		}
+
+		return new Response('not found', { status: 404 });
 	},
 } satisfies ExportedHandler<Env>;
