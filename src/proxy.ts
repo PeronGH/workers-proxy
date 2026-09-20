@@ -101,10 +101,27 @@ export async function proxyStream(request: Request, target: string): Promise<Res
 	// Suppress the runtime's automatic Close reply: without it the socket closes
 	// as soon as the client half-closes, dropping target bytes still in flight.
 	server.accept({ allowHalfOpen: true });
+	bridgeSocket(socket, server);
 
-	// WebSocket -> TCP. Await each write so the socket's backpressure propagates
-	// to the WebSocket instead of buffering unboundedly.
+	return new Response(null, { status: 101, webSocket: client });
+}
+
+/**
+ * Pump bytes between a raw socket and an already-accepted WebSocket.
+ *
+ * Incoming WebSocket frames are written verbatim to the socket; bytes read back
+ * from the socket are sent as binary WebSocket frames. Half-closes are honoured
+ * in both directions: a Close frame from the client sends a FIN to the target
+ * without dropping bytes still in flight the other way.
+ *
+ * `prefix` is written to the socket before any client frame, to flush the tail
+ * of a protocol header that spanned several frames.
+ */
+export function bridgeSocket(socket: Socket, server: WebSocket, prefix?: Uint8Array): void {
+	// Await each write so the socket's backpressure propagates to the WebSocket
+	// instead of buffering unboundedly.
 	const writer = socket.writable.getWriter();
+	if (prefix && prefix.length > 0) void writer.write(prefix).catch(() => {});
 
 	let targetClosed = false;
 	let clientClosed = false;
@@ -128,10 +145,8 @@ export async function proxyStream(request: Request, target: string): Promise<Res
 	}
 
 	server.addEventListener('message', async (event) => {
-		const data = event.data;
-		const chunk = typeof data === 'string' ? new TextEncoder().encode(data) : new Uint8Array(data);
 		try {
-			await writer.write(chunk);
+			await writer.write(frameBytes(event.data));
 		} catch {
 			// write failed — the read loop observes the closed socket and tears down
 		}
@@ -163,6 +178,13 @@ export async function proxyStream(request: Request, target: string): Promise<Res
 			closeClient(clientCloseCode);
 		}
 	})();
+}
 
-	return new Response(null, { status: 101, webSocket: client });
+/**
+ * Binary frames arrive as `Blob` by default on current compatibility dates, and
+ * `new Uint8Array(blob)` would silently yield an empty array. Convert
+ * synchronously so frame order is preserved.
+ */
+export function frameBytes(data: string | ArrayBuffer): Uint8Array {
+	return typeof data === 'string' ? new TextEncoder().encode(data) : new Uint8Array(data);
 }
