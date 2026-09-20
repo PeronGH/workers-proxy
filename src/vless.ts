@@ -1,5 +1,5 @@
 import { connect } from 'cloudflare:sockets';
-import { bridgeSocket, frameBytes } from './proxy';
+import { bridgeSocket, WebSocketFrames } from './proxy';
 
 const VERSION = 0;
 // Response header: protocol version, then addons length 0. Xray only sends addons
@@ -12,9 +12,15 @@ const ADDRESS_IPV4 = 0x01;
 const ADDRESS_DOMAIN = 0x02;
 const ADDRESS_IPV6 = 0x03;
 
-// A valid header is at most 1 + 16 + 1 + 255 + 1 + 2 + 1 + 255 bytes. Anything
-// past this is a client dribbling frames that will never finish the header.
+// A header is at most 1 + 16 + 1 + 1 + 2 + 1 + 1 + 255 bytes: version, UUID,
+// addons length, command, port, address type, domain length, domain. Non-zero
+// addons are rejected, so 255 bytes of them can never occur. Anything past this
+// is a client dribbling frames that will never finish the header.
 const MAX_HEADER = 2048;
+
+// Xray aligns its handshake timeout with nginx's client_header_timeout "so that
+// this value will not indicate server identity" (features/policy/policy.go).
+const HANDSHAKE_TIMEOUT = 60_000;
 
 export interface VlessEnv {
 	/**
@@ -138,34 +144,21 @@ function decodeEarlyData(header: string | null): Uint8Array | null {
 	}
 }
 
-/** Resolves with the next message, or null once the WebSocket closes or errors. */
-function nextMessage(server: WebSocket): Promise<MessageEvent | null> {
-	return new Promise((resolve) => {
-		const onMessage = (event: MessageEvent) => {
-			cleanup();
-			resolve(event);
-		};
-		const onEnd = () => {
-			cleanup();
-			resolve(null);
-		};
-		const cleanup = () => {
-			server.removeEventListener('message', onMessage);
-			server.removeEventListener('close', onEnd);
-			server.removeEventListener('error', onEnd);
-		};
-		server.addEventListener('message', onMessage);
-		server.addEventListener('close', onEnd);
-		server.addEventListener('error', onEnd);
-	});
-}
-
 function concat(a: Uint8Array, b: Uint8Array): Uint8Array {
 	if (a.length === 0) return b;
 	const merged = new Uint8Array(a.length + b.length);
 	merged.set(a);
 	merged.set(b, a.length);
 	return merged;
+}
+
+/** Resolves with the next frame, or null once the peer has gone away. */
+function nextFrame(frames: WebSocketFrames, timeout: number): Promise<Uint8Array | null> {
+	let timer: ReturnType<typeof setTimeout> | undefined;
+	const deadline = new Promise<null>((resolve) => {
+		timer = setTimeout(() => resolve(null), timeout);
+	});
+	return Promise.race([frames.next(), deadline]).finally(() => clearTimeout(timer));
 }
 
 /**
@@ -175,7 +168,7 @@ function concat(a: Uint8Array, b: Uint8Array): Uint8Array {
  * The 101 has to go back before any frame can arrive, so this runs detached and
  * reports failure by closing the WebSocket.
  */
-async function handshake(server: WebSocket, env: VlessEnv, early: Uint8Array | null): Promise<void> {
+async function handshake(frames: WebSocketFrames, env: VlessEnv, early: Uint8Array | null): Promise<void> {
 	const ids = allowedIds(env);
 
 	let buf = early ?? new Uint8Array(0);
@@ -188,16 +181,20 @@ async function handshake(server: WebSocket, env: VlessEnv, early: Uint8Array | n
 			break;
 		}
 		if (parsed.status === 'invalid' || buf.length > MAX_HEADER) {
-			server.close(1008);
+			frames.server.close(1008);
 			return;
 		}
-		const message = await nextMessage(server);
-		if (message === null) return;
-		buf = concat(buf, frameBytes(message.data));
+		const frame = await nextFrame(frames, HANDSHAKE_TIMEOUT);
+		if (frame === null) {
+			// Either the peer gave up mid-header or the handshake timed out.
+			frames.server.close(1008);
+			return;
+		}
+		buf = concat(buf, frame);
 	}
 
 	if (ids !== null && !ids.has(toHex(header.userId))) {
-		server.close(1008);
+		frames.server.close(1008);
 		return;
 	}
 
@@ -205,12 +202,13 @@ async function handshake(server: WebSocket, env: VlessEnv, early: Uint8Array | n
 	try {
 		await socket.opened;
 	} catch {
-		server.close(1011);
+		frames.server.close(1011);
 		return;
 	}
 
-	server.send(RESPONSE_HEADER);
-	bridgeSocket(socket, server, buf.subarray(header.consumed));
+	frames.server.send(RESPONSE_HEADER);
+	// Frames that arrived while the dial was in flight are queued, not lost.
+	bridgeSocket(socket, frames.server, frames, buf.subarray(header.consumed));
 }
 
 /** VLESS over WebSocket — the server side of an Xray `network: ws` outbound. */
@@ -227,10 +225,13 @@ export async function proxyVless(request: Request, env: VlessEnv): Promise<Respo
 	// doesn't drop target bytes still in flight.
 	server.accept({ allowHalfOpen: true });
 
+	// Shared with the bridge, so no frame can be lost in the handoff.
+	const frames = new WebSocketFrames(server);
+
 	// The 101 has to go back before any frame can arrive, so the handshake runs
 	// detached and reports failure by closing the WebSocket.
 	const early = decodeEarlyData(request.headers.get('sec-websocket-protocol'));
-	void handshake(server, env, early).catch(() => server.close(1011));
+	void handshake(frames, env, early).catch(() => server.close(1011));
 
 	// Echo the client's early-data header back, as Xray's WebSocket listener does.
 	const protocol = request.headers.get('sec-websocket-protocol');

@@ -101,9 +101,70 @@ export async function proxyStream(request: Request, target: string): Promise<Res
 	// Suppress the runtime's automatic Close reply: without it the socket closes
 	// as soon as the client half-closes, dropping target bytes still in flight.
 	server.accept({ allowHalfOpen: true });
-	bridgeSocket(socket, server);
+	bridgeSocket(socket, server, new WebSocketFrames(server));
 
 	return new Response(null, { status: 101, webSocket: client });
+}
+
+/**
+ * Frames read off an accepted WebSocket.
+ *
+ * workerd dispatches incoming frames straight out of its read loop, with no
+ * buffer in between, so a frame that arrives while no `message` listener is
+ * attached is discarded for good. Attaching one listener for the lifetime of
+ * the connection and queueing here lets whichever phase owns the connection
+ * change over without losing bytes in the handoff — notably across the dial,
+ * which is real I/O and can outlast the arrival of the next frame.
+ */
+export class WebSocketFrames {
+	private readonly queue: Uint8Array[] = [];
+	private waiter: (() => void) | null = null;
+	private ended = false;
+	/** Close code from the peer, when it closed cleanly rather than errored. */
+	closeCode: number | undefined;
+
+	constructor(readonly server: WebSocket) {
+		server.addEventListener('message', this.onMessage);
+		server.addEventListener('close', this.onClose);
+		server.addEventListener('error', this.onError);
+	}
+
+	private onMessage = (event: MessageEvent): void => {
+		this.queue.push(frameBytes(event.data));
+		this.wake();
+	};
+
+	private onClose = (event: CloseEvent): void => {
+		this.closeCode = event.code;
+		this.end();
+	};
+
+	private onError = (): void => {
+		this.end();
+	};
+
+	private end(): void {
+		this.ended = true;
+		this.wake();
+	}
+
+	private wake(): void {
+		const waiter = this.waiter;
+		this.waiter = null;
+		waiter?.();
+	}
+
+	/** The next frame, or null once the peer has closed or errored. */
+	async next(): Promise<Uint8Array | null> {
+		for (;;) {
+			const frame = this.queue.shift();
+			if (frame !== undefined) return frame;
+			if (this.ended) return null;
+			await new Promise<void>((resolve) => {
+				this.waiter = resolve;
+			});
+		}
+	}
 }
 
 /**
@@ -117,15 +178,16 @@ export async function proxyStream(request: Request, target: string): Promise<Res
  * `prefix` is written to the socket before any client frame, to flush the tail
  * of a protocol header that spanned several frames.
  */
-export function bridgeSocket(socket: Socket, server: WebSocket, prefix?: Uint8Array): void {
-	// Await each write so the socket's backpressure propagates to the WebSocket
-	// instead of buffering unboundedly.
+export function bridgeSocket(socket: Socket, server: WebSocket, frames: WebSocketFrames, prefix?: Uint8Array): void {
+	// Each write is awaited in one loop, so a congested socket stalls this side
+	// rather than other work. The runtime does not flow-control incoming frames,
+	// so a slow target can still queue in memory — there is nothing to push back
+	// against.
 	const writer = socket.writable.getWriter();
 	if (prefix && prefix.length > 0) void writer.write(prefix).catch(() => {});
 
 	let targetClosed = false;
 	let clientClosed = false;
-	let clientCloseCode: number | undefined;
 
 	// Half-close the target: flush queued writes, then send FIN. Idempotent.
 	async function closeTarget(): Promise<void> {
@@ -144,21 +206,22 @@ export function bridgeSocket(socket: Socket, server: WebSocket, prefix?: Uint8Ar
 		server.close(code);
 	}
 
-	server.addEventListener('message', async (event) => {
-		try {
-			await writer.write(frameBytes(event.data));
-		} catch {
-			// write failed — the read loop observes the closed socket and tears down
-		}
-	});
-
 	// The client half-closed: forward its FIN to the target. Target bytes keep
 	// reaching the client until the target itself closes, at which point its
 	// close code is echoed back.
-	server.addEventListener('close', (event) => {
-		clientCloseCode = event.code;
-		void closeTarget();
-	});
+	(async () => {
+		for (;;) {
+			const frame = await frames.next();
+			if (frame === null) break;
+			try {
+				await writer.write(frame);
+			} catch {
+				// write failed — the read loop observes the closed socket and tears down
+				break;
+			}
+		}
+		await closeTarget();
+	})();
 
 	// A socket error rejects `closed`; close the client with an abnormal code
 	// rather than waiting for a FIN that will never arrive.
@@ -175,7 +238,7 @@ export function bridgeSocket(socket: Socket, server: WebSocket, prefix?: Uint8Ar
 			// socket error — fall through to close
 		} finally {
 			await closeTarget();
-			closeClient(clientCloseCode);
+			closeClient(frames.closeCode);
 		}
 	})();
 }
@@ -185,6 +248,6 @@ export function bridgeSocket(socket: Socket, server: WebSocket, prefix?: Uint8Ar
  * `new Uint8Array(blob)` would silently yield an empty array. Convert
  * synchronously so frame order is preserved.
  */
-export function frameBytes(data: string | ArrayBuffer): Uint8Array {
+function frameBytes(data: string | ArrayBuffer): Uint8Array {
 	return typeof data === 'string' ? new TextEncoder().encode(data) : new Uint8Array(data);
 }
