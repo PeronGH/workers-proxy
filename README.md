@@ -56,6 +56,24 @@ bunx wrangler secret put VLESS_USERS
 anyone who discovers the path. Query strings on `/connect` are ignored, so
 Xray's `?ed=` early-data suffix needs no extra configuration.
 
+### Reaching Cloudflare-fronted hosts
+
+A Worker cannot dial Cloudflare's own IP ranges — the edge refuses the
+connection outright. That rules out a large slice of the internet directly, so
+`CF_PROXY_HOSTNAME` names a host to fall back to, on the **original port**, when
+the direct dial is refused:
+
+```sh
+bunx wrangler secret put CF_PROXY_HOSTNAME
+```
+
+Leave it unset to disable the fallback. The fallback is logged, since a silent
+switch to a different host is otherwise invisible.
+
+Be aware the edge reports one message for *every* address it refuses to dial —
+Cloudflare IPs, `localhost`, and private ranges alike — so the fallback fires for
+all of them, not only Cloudflare.
+
 Supported coverage is deliberately narrow: TCP only, `encryption: "none"` and no
 flow. UDP has no outbound socket API on Workers; `xtls-rprx-vision` needs a raw
 TLS 1.3 record stream; mux and reverse are multi-connection protocols. Requests

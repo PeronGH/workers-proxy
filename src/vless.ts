@@ -22,12 +22,27 @@ const MAX_HEADER = 2048;
 // this value will not indicate server identity" (features/policy/policy.go).
 const HANDSHAKE_TIMEOUT = 60_000;
 
+// The edge reports this for every destination it refuses to dial. Cloudflare
+// IPs are one case, but localhost and private ranges share the message, so the
+// fallback fires for all of them and not only Cloudflare.
+const REFUSED_ADDRESS = 'cannot connect to the specified address';
+
+function isRefusedAddress(error: unknown): boolean {
+	const message = error instanceof Error ? error.message : String(error);
+	return message.includes(REFUSED_ADDRESS);
+}
+
 export interface VlessEnv {
 	/**
 	 * Comma-separated VLESS UUIDs allowed to connect. Unset or empty accepts any
 	 * UUID, which makes the Worker an open proxy for anyone who finds the path.
 	 */
 	VLESS_USERS?: string;
+	/**
+	 * Hostname to dial instead of the destination when the edge refuses it
+	 * outright, keeping the original port. Unset disables the fallback.
+	 */
+	CF_PROXY_HOSTNAME?: string;
 }
 
 type Header =
@@ -162,6 +177,31 @@ function nextFrame(frames: WebSocketFrames, timeout: number): Promise<Uint8Array
 }
 
 /**
+ * Dial `hostname:port`, falling back to `proxyHostname` on the same port when the
+ * edge refuses the destination.
+ *
+ * Returns null when the connection could not be made at all.
+ */
+async function dial(hostname: string, port: number, proxyHostname: string | undefined): Promise<Socket | null> {
+	const direct = connect({ hostname, port }, { allowHalfOpen: true });
+	try {
+		await direct.opened;
+		return direct;
+	} catch (error) {
+		if (proxyHostname === undefined || !isRefusedAddress(error)) return null;
+	}
+
+	console.warn(`direct dial of ${hostname}:${port} refused, retrying via ${proxyHostname}:${port}`);
+	const proxied = connect({ hostname: proxyHostname, port }, { allowHalfOpen: true });
+	try {
+		await proxied.opened;
+		return proxied;
+	} catch {
+		return null;
+	}
+}
+
+/**
  * Serve VLESS over a WebSocket at `/connect`: authenticate the request header,
  * dial the requested destination, then bridge the two.
  *
@@ -170,7 +210,6 @@ function nextFrame(frames: WebSocketFrames, timeout: number): Promise<Uint8Array
  */
 async function handshake(frames: WebSocketFrames, env: VlessEnv, early: Uint8Array | null): Promise<void> {
 	const ids = allowedIds(env);
-
 	let buf = early ?? new Uint8Array(0);
 	let header: Extract<Header, { status: 'ok' }>;
 
@@ -198,16 +237,14 @@ async function handshake(frames: WebSocketFrames, env: VlessEnv, early: Uint8Arr
 		return;
 	}
 
-	const socket = connect({ hostname: header.hostname, port: header.port }, { allowHalfOpen: true });
-	try {
-		await socket.opened;
-	} catch {
+	const socket = await dial(header.hostname, header.port, env.CF_PROXY_HOSTNAME?.trim() || undefined);
+	if (socket === null) {
 		frames.server.close(1011);
 		return;
 	}
 
 	frames.server.send(RESPONSE_HEADER);
-	// Frames that arrived while the dial was in flight are queued, not lost.
+	// Frames that arrived while either dial was in flight are queued, not lost.
 	bridgeSocket(socket, frames.server, frames, buf.subarray(header.consumed));
 }
 

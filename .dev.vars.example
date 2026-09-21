@@ -2,3 +2,8 @@
 # UUID, which turns the Worker into an open proxy for anyone who finds the path.
 # Set on deployed Workers with `bunx wrangler secret put VLESS_USERS`.
 # VLESS_USERS=3baf7c1e-2d48-4f6a-9c05-8e1d7a4b2f60
+
+# Hostname to fall back to, on the original port, when the edge refuses to dial
+# the destination outright (it will not dial Cloudflare IPs). Hostname only — the
+# port always comes from the request. Unset disables the fallback.
+# CF_PROXY_HOSTNAME=proxy.example.com
