@@ -89,14 +89,4 @@ bunx wrangler dev
 bunx wrangler deploy
 ```
 
-`bun run deploy:obf` bundles the Worker, runs it through
-`javascript-obfuscator` (see `obfuscator.config.json`), and uploads the result
-with `--no-bundle` so wrangler does not rebuild it. Plain `bun run deploy` or
-`bunx wrangler deploy` uploads the unminified bundle.
-
-Obfuscation keeps identifier scrambling and compact output, but disables string
-arrays/decoding, string splitting, numeric expressions, control-flow flattening,
-and dead-code injection to avoid added runtime work under the 10 ms CPU target.
-Strings remain readable; this is lightweight obfuscation, not secret protection.
-Verify CPU time in Workers Logs under real traffic; this configuration does not
-guarantee every request stays below 10 ms.
+Use `bun run deploy:obf` to deploy with lightweight obfuscation, or `bun run deploy` to deploy without it.
