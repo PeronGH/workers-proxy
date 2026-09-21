@@ -10,7 +10,7 @@
 	"controlFlowFlattening": false,
 	"deadCodeInjection": false,
 	"identifierNamesGenerator": "hexadecimal",
-	"renameGlobals": false,
+	"renameGlobals": true,
 	"renameProperties": false,
 	"sourceMap": false
 }
