@@ -6,10 +6,14 @@
 		"deploy": "wrangler deploy",
 		"dev": "wrangler dev",
 		"start": "wrangler dev",
+		"build:bundle": "wrangler deploy --dry-run --outdir bundled",
+		"obfuscate": "javascript-obfuscator bundled/index.js --output bundled/index.obf.js --config obfuscator.config.json",
+		"deploy:obf": "bun run build:bundle && bun run obfuscate && wrangler deploy bundled/index.obf.js --no-bundle",
 		"cf-typegen": "wrangler types"
 	},
 	"devDependencies": {
 		"@types/node": "^26.6.2",
+		"javascript-obfuscator": "^5.8.0",
 		"typescript": "^5.5.2",
 		"wrangler": "^4.135.0"
 	}
