@@ -88,3 +88,8 @@ bun install
 bunx wrangler dev
 bunx wrangler deploy
 ```
+
+Deploys are obfuscated by default: `bun run deploy:obf` bundles the Worker, runs
+it through `javascript-obfuscator` (see `obfuscator.config.json`), and uploads the
+result with `--no-bundle` so wrangler does not rebuild it. Plain
+`bunx wrangler deploy` uploads the unminified bundle.

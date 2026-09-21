@@ -9,15 +9,7 @@
 	"compatibility_date": "2026-09-16",
 	"observability": {
 		"enabled": true
-	},
-	// Minified and with `keep_names` off, the bundle halves. Source maps are off to
-	// match: they embed the unminified sources verbatim, so uploading them
-	// alongside a minified script would undo the minification. The trade-off is
-	// that Workers Logs no longer deobfuscates stack traces.
-	"minify": true,
-	"keep_names": false,
-	"upload_source_maps": false,
-	"preview_urls": false
+	}
 	/**
 	 * Smart Placement
 	 * https://developers.cloudflare.com/workers/configuration/smart-placement/#smart-placement
