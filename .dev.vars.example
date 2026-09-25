@@ -5,6 +5,5 @@
 
 # Hostname to fall back to, on the original port, when the edge refuses to dial
 # the destination outright (it will not dial Cloudflare IPs). Hostname only — the
-# port always comes from the request. Bracket IPv6 literals, e.g. [2001:db8::1].
-# Unset disables the fallback.
+# port always comes from the request. Unset disables the fallback.
 # CF_PROXY_HOSTNAME=proxy.example.com

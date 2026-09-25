@@ -1,4 +1,4 @@
-import { connect } from 'cloudflare:sockets';
+import { connect, connectTls } from './sockets';
 
 // Cloudflare-injected headers; stripped so the upstream sees a request
 // close to the client's original. A few are re-added by the runtime and
@@ -78,17 +78,11 @@ export async function proxyStream(request: Request, target: string): Promise<Res
 		return new Response('expected websocket', { status: 426 });
 	}
 
-	const socket = connect(
-		{ hostname, port },
-		// `allowHalfOpen` keeps the writable side alive after the target EOFs, so a
-		// FIN from the target doesn't stop us writing to it.
-		{ secureTransport: useTls ? 'on' : 'off', allowHalfOpen: true },
-	);
-
 	// Wait for the connection before upgrading, so a failed dial surfaces as an
 	// HTTP error instead of a 101 followed by an immediate close.
+	let socket: Socket;
 	try {
-		await socket.opened;
+		socket = await (useTls ? connectTls : connect)({ hostname, port });
 	} catch {
 		return new Response('upstream connect failed', { status: 502 });
 	}
