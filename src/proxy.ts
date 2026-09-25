@@ -1,7 +1,4 @@
-import { createFetcher } from '@pixel/socket-fetch';
 import { connect, connectTls } from './sockets';
-
-const fetchUpstream = createFetcher({ connect, connectTls });
 
 // Cloudflare-injected headers; stripped so the upstream sees a request
 // close to the client's original. A few are re-added by the runtime and
@@ -33,22 +30,13 @@ export async function proxyHttp(request: Request, target: string): Promise<Respo
 	for (const name of CF_INJECTED_HEADERS) {
 		headers.delete(name);
 	}
-	// The fetcher sends a supplied Host verbatim, which would name this Worker, and
-	// a forwarded `Connection: keep-alive` would stop it asking the upstream to
-	// close, leaving an unframed response body open forever.
-	headers.delete('host');
-	headers.delete('connection');
-	// The fetcher only decodes gzip and deflate, but the runtime encodes the
-	// returned body per its Content-Encoding, so any other coding (such as br)
-	// would reach the client encoded twice. Dropping the header lets the fetcher
-	// request only codings it can decode.
-	headers.delete('accept-encoding');
-	const response = await fetchUpstream(target + url.search, {
+	const upstream = new Request(target + url.search, {
 		method: request.method,
 		headers,
 		body: request.body,
 		redirect: 'manual',
 	});
+	const response = await fetch(upstream);
 	if (response.status >= 300 && response.status < 400) {
 		const location = response.headers.get('location');
 		if (location) {
