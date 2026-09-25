@@ -1,5 +1,7 @@
 import { createFetcher } from '@pixel/socket-fetch';
-import { sockets, type SocketsEnv } from './sockets';
+import { connect, connectTls } from './sockets';
+
+const fetchUpstream = createFetcher({ connect, connectTls });
 
 // Cloudflare-injected headers; stripped so the upstream sees a request
 // close to the client's original. A few are re-added by the runtime and
@@ -25,7 +27,7 @@ const CF_INJECTED_HEADERS = [
 
 // Forward transparently: strip CF headers, don't auto-follow redirects,
 // and rewrite any 3xx `Location` back through this Worker.
-export async function proxyHttp(request: Request, target: string, env: SocketsEnv): Promise<Response> {
+export async function proxyHttp(request: Request, target: string): Promise<Response> {
 	const url = new URL(request.url);
 	const headers = new Headers(request.headers);
 	for (const name of CF_INJECTED_HEADERS) {
@@ -41,7 +43,7 @@ export async function proxyHttp(request: Request, target: string, env: SocketsEn
 	// would reach the client encoded twice. Dropping the header lets the fetcher
 	// request only codings it can decode.
 	headers.delete('accept-encoding');
-	const response = await createFetcher(sockets(env))(target + url.search, {
+	const response = await fetchUpstream(target + url.search, {
 		method: request.method,
 		headers,
 		body: request.body,
@@ -73,7 +75,7 @@ export async function proxyHttp(request: Request, target: string, env: SocketsEn
  * honoured in both directions: a Close frame from the client sends a FIN to
  * the target without dropping bytes still in flight the other way.
  */
-export async function proxyStream(request: Request, target: string, env: SocketsEnv): Promise<Response> {
+export async function proxyStream(request: Request, target: string): Promise<Response> {
 	const useTls = target.startsWith('tls://');
 	const hostPort = target.slice(6);
 	const colonIdx = hostPort.lastIndexOf(':');
@@ -92,7 +94,6 @@ export async function proxyStream(request: Request, target: string, env: Sockets
 	// HTTP error instead of a 101 followed by an immediate close.
 	let socket: Socket;
 	try {
-		const { connect, connectTls } = sockets(env);
 		socket = await (useTls ? connectTls : connect)({ hostname, port });
 	} catch {
 		return new Response('upstream connect failed', { status: 502 });

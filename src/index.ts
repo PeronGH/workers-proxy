@@ -14,11 +14,11 @@ export default {
 		const target = new URL(request.url).pathname.slice(1);
 
 		if (target.startsWith('http://') || target.startsWith('https://')) {
-			return proxyHttp(request, target, env);
+			return proxyHttp(request, target);
 		}
 
 		if (target.startsWith('tcp://') || target.startsWith('tls://')) {
-			return proxyStream(request, target, env);
+			return proxyStream(request, target);
 		}
 
 		return new Response('not found', { status: 404 });
