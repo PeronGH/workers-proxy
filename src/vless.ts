@@ -104,7 +104,8 @@ function parseHeader(buf: Uint8Array): Header {
 			for (let i = 0; i < 16; i += 2) {
 				groups.push(((bytes[i] << 8) | bytes[i + 1]).toString(16));
 			}
-			hostname = groups.join(':');
+			// connect() only accepts IPv6 literals in brackets.
+			hostname = `[${groups.join(':')}]`;
 			break;
 		}
 		case ADDRESS_DOMAIN: {
