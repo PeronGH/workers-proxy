@@ -10,7 +10,7 @@ https://<worker-host>/<target>
 
 | Prefix | Behavior |
 | --- | --- |
-| `http://`, `https://` | Proxies the request over `fetch`. Cloudflare-injected headers (`cf-*`, `x-forwarded-*`, …) are stripped, redirects are not followed, and 3xx `Location` headers are rewritten back through the Worker. |
+| `http://`, `https://` | Proxies the request as HTTP/1.1 over a raw socket ([`@pixel/socket-fetch`](https://jsr.io/@pixel/socket-fetch)), so Cloudflare-fronted hosts are unreachable. Cloudflare-injected headers (`cf-*`, `x-forwarded-*`, …) are stripped, redirects are not followed, and 3xx `Location` headers are rewritten back through the Worker. |
 | `tcp://`, `tls://` | Bridges a binary WebSocket to a raw TCP/TLS socket, the server side of `websocat -b ws://host/<target>`. Requires a WebSocket upgrade (`426` otherwise). |
 | `/connect` | [VLESS](https://xtls.github.io/en/config/protocols/vless.html) over WebSocket, the server side of an Xray `network: ws` outbound. See below. |
 

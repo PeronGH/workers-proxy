@@ -16,5 +16,8 @@
 		"javascript-obfuscator": "^5.8.0",
 		"typescript": "^5.5.2",
 		"wrangler": "^4.135.0"
+	},
+	"dependencies": {
+		"@pixel/socket-fetch": "npm:@jsr/pixel__socket-fetch@^0.1.0"
 	}
 }
