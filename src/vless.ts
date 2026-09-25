@@ -1,5 +1,5 @@
+import { connect } from 'cloudflare:sockets';
 import { bridgeSocket, WebSocketFrames } from './proxy';
-import { connect } from './sockets';
 
 const VERSION = 0;
 // Response header: protocol version, then addons length 0. Xray only sends addons
@@ -104,7 +104,8 @@ function parseHeader(buf: Uint8Array): Header {
 			for (let i = 0; i < 16; i += 2) {
 				groups.push(((bytes[i] << 8) | bytes[i + 1]).toString(16));
 			}
-			hostname = groups.join(':');
+			// connect() only accepts IPv6 literals in brackets.
+			hostname = `[${groups.join(':')}]`;
 			break;
 		}
 		case ADDRESS_DOMAIN: {
@@ -183,15 +184,19 @@ function nextFrame(frames: WebSocketFrames, timeout: number): Promise<Uint8Array
  * Returns null when the connection could not be made at all.
  */
 async function dial(hostname: string, port: number, proxyHostname: string | undefined): Promise<Socket | null> {
+	const direct = connect({ hostname, port }, { allowHalfOpen: true });
 	try {
-		return await connect({ hostname, port });
+		await direct.opened;
+		return direct;
 	} catch (error) {
 		if (proxyHostname === undefined || !isRefusedAddress(error)) return null;
 	}
 
 	console.warn(`direct dial of ${hostname}:${port} refused, retrying via ${proxyHostname}:${port}`);
+	const proxied = connect({ hostname: proxyHostname, port }, { allowHalfOpen: true });
 	try {
-		return await connect({ hostname: proxyHostname, port });
+		await proxied.opened;
+		return proxied;
 	} catch {
 		return null;
 	}

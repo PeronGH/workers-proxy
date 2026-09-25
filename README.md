@@ -67,8 +67,9 @@ the direct dial is refused:
 bunx wrangler secret put CF_PROXY_HOSTNAME
 ```
 
-Leave it unset to disable the fallback. The fallback is logged, since a silent
-switch to a different host is otherwise invisible.
+IPv6 literals must be bracketed, e.g. `[2001:db8::1]`. Leave it unset to
+disable the fallback. The fallback is logged, since a silent switch to a
+different host is otherwise invisible.
 
 Be aware the edge reports one message for *every* address it refuses to dial —
 Cloudflare IPs, `localhost`, and private ranges alike — so the fallback fires for
