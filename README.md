@@ -10,7 +10,7 @@ https://<worker-host>/<target>
 
 | Prefix | Behavior |
 | --- | --- |
-| `http://`, `https://` | Proxies the request as HTTP/1.1 over a raw socket ([`@pixel/socket-fetch`](https://jsr.io/@pixel/socket-fetch)), so Cloudflare-fronted hosts are unreachable. Cloudflare-injected headers (`cf-*`, `x-forwarded-*`, …) are stripped, redirects are not followed, and 3xx `Location` headers are rewritten back through the Worker. |
+| `http://`, `https://` | Proxies the request as HTTP/1.1 over a raw socket ([`@pixel/socket-fetch`](https://jsr.io/@pixel/socket-fetch)), so Cloudflare-fronted hosts need [`CF_PROXY_HOSTNAME`](#reaching-cloudflare-fronted-hosts). Cloudflare-injected headers (`cf-*`, `x-forwarded-*`, …) are stripped, redirects are not followed, and 3xx `Location` headers are rewritten back through the Worker. |
 | `tcp://`, `tls://` | Bridges a binary WebSocket to a raw TCP/TLS socket, the server side of `websocat -b ws://host/<target>`. Requires a WebSocket upgrade (`426` otherwise). |
 | `/connect` | [VLESS](https://xtls.github.io/en/config/protocols/vless.html) over WebSocket, the server side of an Xray `network: ws` outbound. See below. |
 
@@ -56,12 +56,21 @@ bunx wrangler secret put VLESS_USERS
 anyone who discovers the path. Query strings on `/connect` are ignored, so
 Xray's `?ed=` early-data suffix needs no extra configuration.
 
-### Reaching Cloudflare-fronted hosts
+Supported coverage is deliberately narrow: TCP only, `encryption: "none"` and no
+flow. UDP has no outbound socket API on Workers; `xtls-rprx-vision` needs a raw
+TLS 1.3 record stream; mux and reverse are multi-connection protocols. Requests
+outside that set get the WebSocket closed rather than an error page, since the
+101 has already been sent. A header still incomplete after 60s is dropped, which
+is Xray's own handshake timeout.
+
+## Reaching Cloudflare-fronted hosts
 
 A Worker cannot dial Cloudflare's own IP ranges — the edge refuses the
 connection outright. That rules out a large slice of the internet directly, so
 `CF_PROXY_HOSTNAME` names a host to fall back to, on the **original port**, when
-the direct dial is refused:
+the direct dial is refused. It applies to every target — HTTP(S), `tcp://`,
+`tls://` and VLESS. For TLS targets the fallback host must relay raw TLS (an SNI
+proxy, for example): the handshake still names and verifies the original host.
 
 ```sh
 bunx wrangler secret put CF_PROXY_HOSTNAME
@@ -73,13 +82,6 @@ switch to a different host is otherwise invisible.
 Be aware the edge reports one message for *every* address it refuses to dial —
 Cloudflare IPs, `localhost`, and private ranges alike — so the fallback fires for
 all of them, not only Cloudflare.
-
-Supported coverage is deliberately narrow: TCP only, `encryption: "none"` and no
-flow. UDP has no outbound socket API on Workers; `xtls-rprx-vision` needs a raw
-TLS 1.3 record stream; mux and reverse are multi-connection protocols. Requests
-outside that set get the WebSocket closed rather than an error page, since the
-101 has already been sent. A header still incomplete after 60s is dropped, which
-is Xray's own handshake timeout.
 
 ## Development
 
