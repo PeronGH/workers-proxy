@@ -75,12 +75,14 @@ Be aware the edge reports one message for *every* address it refuses to dial —
 Cloudflare IPs, `localhost`, and private ranges alike — so the fallback fires for
 all of them, not only Cloudflare.
 
-Supported coverage is deliberately narrow: TCP only, `encryption: "none"` and no
-flow. UDP has no outbound socket API on Workers; `xtls-rprx-vision` needs a raw
-TLS 1.3 record stream; mux and reverse are multi-connection protocols. Requests
-outside that set get the WebSocket closed rather than an error page, since the
-101 has already been sent. A header still incomplete after 60s is dropped, which
-is Xray's own handshake timeout.
+Supported coverage is deliberately narrow: TCP, `encryption: "none"` and no
+flow. UDP has no outbound socket API on Workers, so the one exception is UDP/53,
+which is sent to Google DNS (`8.8.8.8`) over TCP whatever resolver the client
+named; other UDP is refused. `xtls-rprx-vision` needs a raw TLS 1.3 record
+stream; mux and reverse are multi-connection protocols. Requests outside that
+set get the WebSocket closed rather than an error page, since the 101 has
+already been sent. A header still incomplete after 60s is dropped, which is
+Xray's own handshake timeout.
 
 ## Development
 
