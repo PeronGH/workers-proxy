@@ -60,24 +60,20 @@ Xray's `?ed=` early-data suffix needs no extra configuration.
 
 A Worker cannot dial Cloudflare's own IP ranges — the edge refuses the
 connection outright. That rules out a large slice of the internet directly, so
-`NAT64_PREFIX` names a public NAT64 gateway to retry through, on the **original
-port**, when the direct dial is refused:
+`CF_PROXY_HOSTNAME` names a host to fall back to, on the **original port**, when
+the direct dial is refused:
 
 ```sh
-bunx wrangler secret put NAT64_PREFIX
+bunx wrangler secret put CF_PROXY_HOSTNAME
 ```
 
-The prefix must form an IPv6 address when a dotted IPv4 address is appended to
-it, e.g. `64:ff9b::` or `2a01:4f9:c010:3f02:64:0:`. Domains are resolved to
-their first A record over DoH (`cloudflare-dns.com`). Leave it unset to disable
-the fallback. The fallback is logged, since a silent switch to a different route
-is otherwise invisible.
+IPv6 literals must be bracketed, e.g. `[2001:db8::1]`. Leave it unset to
+disable the fallback. The fallback is logged, since a silent switch to a
+different host is otherwise invisible.
 
-The gateway operator sees every destination sent through it, and any unencrypted
-traffic. IPv6 destinations have no fallback, since NAT64 only reaches IPv4. The
-edge reports one message for *every* address it refuses to dial — Cloudflare IPs,
-`localhost`, and private ranges alike — so private and loopback addresses are
-never sent to the gateway.
+Be aware the edge reports one message for *every* address it refuses to dial —
+Cloudflare IPs, `localhost`, and private ranges alike — so the fallback fires for
+all of them, not only Cloudflare.
 
 Supported coverage is deliberately narrow: TCP, `encryption: "none"` and no
 flow. UDP has no outbound socket API on Workers, so the one exception is UDP/53,

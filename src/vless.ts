@@ -28,13 +28,9 @@ const MAX_HEADER = 2048;
 // this value will not indicate server identity" (features/policy/policy.go).
 const HANDSHAKE_TIMEOUT = 60_000;
 
-const DOH_ENDPOINT = 'https://cloudflare-dns.com/dns-query';
-const DNS_TYPE_A = 1;
-const IPV4_LITERAL = /^\d{1,3}(\.\d{1,3}){3}$/;
-
 // The edge reports this for every destination it refuses to dial. Cloudflare
 // IPs are one case, but localhost and private ranges share the message, so the
-// fallback has to filter those out itself.
+// fallback fires for all of them and not only Cloudflare.
 const REFUSED_ADDRESS = 'cannot connect to the specified address';
 
 function isRefusedAddress(error: unknown): boolean {
@@ -49,11 +45,10 @@ export interface VlessEnv {
 	 */
 	VLESS_USERS?: string;
 	/**
-	 * NAT64 prefix that forms an IPv6 address when a dotted IPv4 address is
-	 * appended, e.g. `64:ff9b::`. Destinations the edge refuses outright are
-	 * retried through it. Unset disables the fallback.
+	 * Hostname to dial instead of the destination when the edge refuses it
+	 * outright, keeping the original port. Unset disables the fallback.
 	 */
-	NAT64_PREFIX?: string;
+	CF_PROXY_HOSTNAME?: string;
 }
 
 type Header =
@@ -194,61 +189,26 @@ function nextFrame(frames: WebSocketFrames, timeout: number): Promise<Uint8Array
 	return Promise.race([frames.next(), deadline]).finally(() => clearTimeout(timer));
 }
 
-/** First A record for `name` over DoH, or null when it has none. */
-async function resolveIpv4(name: string): Promise<string | null> {
-	const url = `${DOH_ENDPOINT}?name=${encodeURIComponent(name)}&type=A`;
-	const response = await fetch(url, { headers: { accept: 'application/dns-json' } });
-	const body = await response.json<{ Answer?: { type: number; data: string }[] }>();
-	// Any CNAMEs in the chain are listed alongside the A records.
-	return body.Answer?.find((record) => record.type === DNS_TYPE_A)?.data ?? null;
-}
-
 /**
- * Whether a NAT64 gateway may be asked to reach `ipv4`. Private and loopback
- * ranges would land inside the gateway operator's network instead.
- */
-function isGlobalIpv4(ipv4: string): boolean {
-	const [a, b] = ipv4.split('.').map(Number);
-	return !(
-		a === 0 ||
-		a === 10 ||
-		a === 127 ||
-		a >= 224 ||
-		(a === 100 && b >= 64 && b < 128) ||
-		(a === 169 && b === 254) ||
-		(a === 172 && b >= 16 && b < 32) ||
-		(a === 192 && b === 168)
-	);
-}
-
-/**
- * Dial `hostname:port`, falling back to NAT64 on the same port when the edge
- * refuses the destination.
+ * Dial `hostname:port`, falling back to `proxyHostname` on the same port when the
+ * edge refuses the destination.
  *
  * Returns null when the connection could not be made at all.
  */
-async function dial(hostname: string, port: number, nat64Prefix: string | undefined): Promise<Socket | null> {
+async function dial(hostname: string, port: number, proxyHostname: string | undefined): Promise<Socket | null> {
 	const direct = connect({ hostname, port }, { allowHalfOpen: true });
 	try {
 		await direct.opened;
 		return direct;
 	} catch (error) {
-		if (nat64Prefix === undefined || !isRefusedAddress(error)) return null;
+		if (proxyHostname === undefined || !isRefusedAddress(error)) return null;
 	}
 
-	// NAT64 only reaches IPv4, so IPv6 destinations have no fallback.
-	if (hostname.startsWith('[')) return null;
-	const ipv4 = IPV4_LITERAL.test(hostname) ? hostname : await resolveIpv4(hostname);
-	if (ipv4 === null || !isGlobalIpv4(ipv4)) return null;
-
-	// IPv6 text form allows a trailing dotted quad, which the edge accepts, so the
-	// IPv4 address is appended verbatim.
-	const translated = `[${nat64Prefix}${ipv4}]`;
-	console.warn(`direct dial of ${hostname}:${port} refused, retrying via ${translated}:${port}`);
-	const socket = connect({ hostname: translated, port }, { allowHalfOpen: true });
+	console.warn(`direct dial of ${hostname}:${port} refused, retrying via ${proxyHostname}:${port}`);
+	const proxied = connect({ hostname: proxyHostname, port }, { allowHalfOpen: true });
 	try {
-		await socket.opened;
-		return socket;
+		await proxied.opened;
+		return proxied;
 	} catch {
 		return null;
 	}
@@ -290,7 +250,7 @@ async function handshake(frames: WebSocketFrames, env: VlessEnv, early: Uint8Arr
 		return;
 	}
 
-	const socket = await dial(header.hostname, header.port, env.NAT64_PREFIX?.trim() || undefined);
+	const socket = await dial(header.hostname, header.port, env.CF_PROXY_HOSTNAME?.trim() || undefined);
 	if (socket === null) {
 		frames.server.close(1011);
 		return;
