@@ -3,8 +3,7 @@
 # Set on deployed Workers with `bunx wrangler secret put VLESS_USERS`.
 # VLESS_USERS=3baf7c1e-2d48-4f6a-9c05-8e1d7a4b2f60
 
-# Hostname to fall back to, on the original port, when the edge refuses to dial
-# the destination outright (it will not dial Cloudflare IPs). Hostname only — the
-# port always comes from the request. Bracket IPv6 literals, e.g. [2001:db8::1].
-# Unset disables the fallback.
-# CF_PROXY_HOSTNAME=proxy.example.com
+# NAT64 prefix to retry through, on the original port, when the edge refuses to
+# dial the destination outright (it will not dial Cloudflare IPs). Appending a
+# dotted IPv4 address must form an IPv6 address. Unset disables the fallback.
+# NAT64_PREFIX=2a01:4f9:c010:3f02:64:0:
