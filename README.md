@@ -13,7 +13,6 @@ https://<worker-host>/<target>
 | `http://`, `https://` | Proxies the request over `fetch`. Cloudflare-injected headers (`cf-*`, `x-forwarded-*`, …) are stripped, redirects are not followed, and 3xx `Location` headers are rewritten back through the Worker. |
 | `tcp://`, `tls://` | Bridges a binary WebSocket to a raw TCP/TLS socket, the server side of `websocat -b ws://host/<target>`. Requires a WebSocket upgrade (`426` otherwise). |
 | `/connect` | [VLESS](https://xtls.github.io/en/config/protocols/vless.html) over WebSocket, the server side of an Xray `network: ws` outbound. See below. |
-| `/connect64` | As `/connect`, but every destination goes through the NAT64 gateway. See below. |
 
 Any other path returns `404 not found`.
 
@@ -79,11 +78,6 @@ traffic. IPv6 destinations have no fallback, since NAT64 only reaches IPv4. The
 edge reports one message for *every* address it refuses to dial — Cloudflare IPs,
 `localhost`, and private ranges alike — so private and loopback addresses are
 never sent to the gateway.
-
-`/connect64` skips the direct dial and sends *every* destination through the
-gateway, so targets see the gateway's IPv4 address rather than Cloudflare's. It
-returns `404` while `NAT64_PREFIX` is unset. IPv6, private and loopback
-destinations are refused on this path rather than dialled directly.
 
 Supported coverage is deliberately narrow: TCP, `encryption: "none"` and no
 flow. UDP has no outbound socket API on Workers, so the one exception is UDP/53,

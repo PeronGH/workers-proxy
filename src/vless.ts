@@ -221,31 +221,6 @@ function isGlobalIpv4(ipv4: string): boolean {
 	);
 }
 
-type Dialer = (hostname: string, port: number) => Promise<Socket | null>;
-
-/**
- * Dial `hostname:port` through the NAT64 gateway at `prefix`.
- *
- * Returns null when the destination has no global IPv4 address to translate, or
- * the connection could not be made.
- */
-async function dialNat64(hostname: string, port: number, prefix: string): Promise<Socket | null> {
-	// NAT64 only reaches IPv4.
-	if (hostname.startsWith('[')) return null;
-	const ipv4 = IPV4_LITERAL.test(hostname) ? hostname : await resolveIpv4(hostname);
-	if (ipv4 === null || !isGlobalIpv4(ipv4)) return null;
-
-	// IPv6 text form allows a trailing dotted quad, which the edge accepts, so the
-	// IPv4 address is appended verbatim.
-	const socket = connect({ hostname: `[${prefix}${ipv4}]`, port }, { allowHalfOpen: true });
-	try {
-		await socket.opened;
-		return socket;
-	} catch {
-		return null;
-	}
-}
-
 /**
  * Dial `hostname:port`, falling back to NAT64 on the same port when the edge
  * refuses the destination.
@@ -261,8 +236,22 @@ async function dial(hostname: string, port: number, nat64Prefix: string | undefi
 		if (nat64Prefix === undefined || !isRefusedAddress(error)) return null;
 	}
 
-	console.warn(`direct dial of ${hostname}:${port} refused, retrying via NAT64 ${nat64Prefix}`);
-	return dialNat64(hostname, port, nat64Prefix);
+	// NAT64 only reaches IPv4, so IPv6 destinations have no fallback.
+	if (hostname.startsWith('[')) return null;
+	const ipv4 = IPV4_LITERAL.test(hostname) ? hostname : await resolveIpv4(hostname);
+	if (ipv4 === null || !isGlobalIpv4(ipv4)) return null;
+
+	// IPv6 text form allows a trailing dotted quad, which the edge accepts, so the
+	// IPv4 address is appended verbatim.
+	const translated = `[${nat64Prefix}${ipv4}]`;
+	console.warn(`direct dial of ${hostname}:${port} refused, retrying via ${translated}:${port}`);
+	const socket = connect({ hostname: translated, port }, { allowHalfOpen: true });
+	try {
+		await socket.opened;
+		return socket;
+	} catch {
+		return null;
+	}
 }
 
 /**
@@ -272,7 +261,7 @@ async function dial(hostname: string, port: number, nat64Prefix: string | undefi
  * The 101 has to go back before any frame can arrive, so this runs detached and
  * reports failure by closing the WebSocket.
  */
-async function handshake(frames: WebSocketFrames, env: VlessEnv, early: Uint8Array | null, dialer: Dialer): Promise<void> {
+async function handshake(frames: WebSocketFrames, env: VlessEnv, early: Uint8Array | null): Promise<void> {
 	const ids = allowedIds(env);
 	let buf = early ?? new Uint8Array(0);
 	let header: Extract<Header, { status: 'ok' }>;
@@ -301,7 +290,7 @@ async function handshake(frames: WebSocketFrames, env: VlessEnv, early: Uint8Arr
 		return;
 	}
 
-	const socket = await dialer(header.hostname, header.port);
+	const socket = await dial(header.hostname, header.port, env.NAT64_PREFIX?.trim() || undefined);
 	if (socket === null) {
 		frames.server.close(1011);
 		return;
@@ -312,23 +301,8 @@ async function handshake(frames: WebSocketFrames, env: VlessEnv, early: Uint8Arr
 	bridgeSocket(socket, frames.server, frames, buf.subarray(header.consumed));
 }
 
-/**
- * VLESS over WebSocket — the server side of an Xray `network: ws` outbound.
- *
- * With `nat64Only`, every destination is dialled through the NAT64 gateway
- * instead of only those the edge refuses.
- */
-export async function proxyVless(request: Request, env: VlessEnv, nat64Only = false): Promise<Response> {
-	const nat64Prefix = env.NAT64_PREFIX?.trim() || undefined;
-	let dialer: Dialer;
-	if (!nat64Only) {
-		dialer = (hostname, port) => dial(hostname, port, nat64Prefix);
-	} else if (nat64Prefix !== undefined) {
-		dialer = (hostname, port) => dialNat64(hostname, port, nat64Prefix);
-	} else {
-		return new Response('not found', { status: 404 });
-	}
-
+/** VLESS over WebSocket — the server side of an Xray `network: ws` outbound. */
+export async function proxyVless(request: Request, env: VlessEnv): Promise<Response> {
 	if (request.headers.get('Upgrade') !== 'websocket') {
 		return new Response('expected websocket', { status: 426 });
 	}
@@ -347,7 +321,7 @@ export async function proxyVless(request: Request, env: VlessEnv, nat64Only = fa
 	// The 101 has to go back before any frame can arrive, so the handshake runs
 	// detached and reports failure by closing the WebSocket.
 	const early = decodeEarlyData(request.headers.get('sec-websocket-protocol'));
-	void handshake(frames, env, early, dialer).catch(() => server.close(1011));
+	void handshake(frames, env, early).catch(() => server.close(1011));
 
 	// Echo the client's early-data header back, as Xray's WebSocket listener does.
 	const protocol = request.headers.get('sec-websocket-protocol');
