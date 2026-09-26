@@ -89,7 +89,7 @@ Xray's own handshake timeout.
 ```sh
 bun install
 bunx wrangler dev
-bunx wrangler deploy
+bun run deploy
 ```
 
-Use `bun run deploy:obf` to deploy with lightweight obfuscation, or `bun run deploy` to deploy without it.
+Use `bun run deploy` to deploy with lightweight obfuscation, or `bun run deploy:plain` to deploy without it.
