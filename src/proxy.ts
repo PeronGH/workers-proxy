@@ -1,18 +1,9 @@
 import { connect } from 'cloudflare:sockets';
 
-// Cloudflare-injected headers; stripped so the upstream sees a request
-// close to the client's original. A few are re-added by the runtime and
-// can't actually be removed from the subrequest.
-const CF_INJECTED_HEADERS = [
-	'cf-connecting-ip',
-	'cf-connecting-ipv6',
-	'cf-ipcountry',
-	'cf-ray',
-	'cf-visitor',
-	'cf-ew-via',
-	'cf-pseudo-ipv4',
-	'cf-worker',
-	'cf-request-id',
+// Cloudflare-injected headers (every `cf-*` plus these); stripped so the
+// upstream sees a request close to the client's original. A few are re-added
+// by the runtime and can't actually be removed from the subrequest.
+const STRIPPED_HEADERS = new Set([
 	'cdn-loop',
 	'true-client-ip',
 	'x-edge-ip',
@@ -20,16 +11,17 @@ const CF_INJECTED_HEADERS = [
 	'x-forwarded-proto',
 	'x-forwarded-port',
 	'x-real-ip',
-];
+]);
+
+function isStripped(name: string): boolean {
+	return name.startsWith('cf-') || STRIPPED_HEADERS.has(name);
+}
 
 // Forward transparently: strip CF headers, don't auto-follow redirects,
 // and rewrite any 3xx `Location` back through this Worker.
 export async function proxyHttp(request: Request, target: string): Promise<Response> {
 	const url = new URL(request.url);
-	const headers = new Headers(request.headers);
-	for (const name of CF_INJECTED_HEADERS) {
-		headers.delete(name);
-	}
+	const headers = new Headers([...request.headers].filter(([name]) => !isStripped(name)));
 	const upstream = new Request(target + url.search, {
 		method: request.method,
 		headers,
